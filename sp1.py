@@ -6,7 +6,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -22,9 +22,8 @@ SP500_TICKERS = [
     "ABBV", "NFLX", "AMD", "CRM", "TMO", "LIN", "ADBE", "MCD", "CSCO", "ACN"
 ]
 
-# Cache sits next to the script file
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sp1_cache")
-SHARES_MAX_AGE_DAYS = 30   # re-fetch shares data after this many days
+SHARES_MAX_AGE_DAYS = 30   
 
 
 # ── Cache I/O ─────────────────────────────────────────────────────────────────
@@ -36,7 +35,6 @@ def _shares_path(ticker):
     return os.path.join(CACHE_DIR, "shares", f"{ticker}.csv")
 
 def _read_series(path):
-    """Load a tz-naive, float-valued pd.Series from CSV.  Returns None on failure."""
     if not os.path.exists(path):
         return None
     try:
@@ -54,10 +52,6 @@ def _write_series(series, path):
 # ── Price data (cached, gap-filling) ─────────────────────────────────────────
 
 def _download_prices(ticker, start, end):
-    """
-    Raw yfinance download for monthly close prices in [start, end].
-    We request end + 2 months so the final month's bar is always included.
-    """
     try:
         dl_end = pd.Timestamp(end) + pd.DateOffset(months=2)
         df = yf.download(ticker,
@@ -77,11 +71,6 @@ def _download_prices(ticker, start, end):
 
 
 def get_price_series(ticker, start_date, end_date):
-    """
-    Return monthly close prices for [start_date, end_date].
-    Reads the on-disk cache first; only downloads date ranges that are missing,
-    then merges and re-saves the cache before returning the requested window.
-    """
     path   = _price_path(ticker)
     cached = _read_series(path)
     start  = pd.Timestamp(start_date)
@@ -92,14 +81,14 @@ def get_price_series(ticker, start_date, end_date):
     if cached is not None and not cached.empty:
         cmin, cmax = cached.index.min(), cached.index.max()
 
-        if start < cmin:                          # gap before cache
+        if start < cmin:                          
             pre = _download_prices(ticker, start, cmin - pd.DateOffset(days=1))
             if pre is not None and not pre.empty:
                 parts.append(pre)
 
         parts.append(cached)
 
-        if end > cmax:                            # gap after cache
+        if end > cmax:                            
             post = _download_prices(ticker, cmax + pd.DateOffset(days=1), end)
             if post is not None and not post.empty:
                 parts.append(post)
@@ -121,11 +110,8 @@ def get_price_series(ticker, start_date, end_date):
 # ── Shares data (cached, age-based refresh) ───────────────────────────────────
 
 def _download_shares(ticker, start_date):
-    """Fetch shares-outstanding history from yfinance (no cache logic)."""
     try:
         t = yf.Ticker(ticker)
-
-        # Attempt 1: get_shares_full — SEC-sourced full time series
         try:
             raw = t.get_shares_full(start=start_date)
             if raw is not None and len(raw) > 0:
@@ -136,7 +122,6 @@ def _download_shares(ticker, start_date):
         except Exception:
             pass
 
-        # Attempt 2: quarterly balance sheet rows
         bs = t.quarterly_balance_sheet
         for row_name in ["Ordinary Shares Number", "Share Issued", "Common Stock"]:
             if row_name in bs.index:
@@ -152,11 +137,6 @@ def _download_shares(ticker, start_date):
 
 
 def get_shares_series(ticker, start_date):
-    """
-    Return a point-in-time shares-outstanding Series for `ticker`.
-    Cache is re-used if the file is younger than SHARES_MAX_AGE_DAYS,
-    otherwise a fresh fetch is performed and the cache is updated.
-    """
     path = _shares_path(ticker)
 
     if os.path.exists(path):
@@ -173,10 +153,6 @@ def get_shares_series(ticker, start_date):
 
 
 def pit_shares(history, ticker, as_of):
-    """
-    Point-in-time shares lookup: returns the most recently filed share count
-    on or before `as_of`.  Falls back to the earliest record if none precede it.
-    """
     if ticker not in history:
         return None
     s = history[ticker]
@@ -239,26 +215,21 @@ def run_simulation(start_str, end_str, seed, monthly_contrib, status_cb=None):
     value_sp1    = float(seed)
     sp500_values = []
     sp1_values   = []
-    top_tickers  = [] # Array to track history for graph coloring
+    top_tickers  = [] 
 
     if status_cb:
         status_cb("Running simulation…")
 
     for i in range(len(dates)):
-        # Contribution arrives at the start of the month (participates in returns)
         value_sp500 += monthly_contrib
         value_sp1   += monthly_contrib
 
-        # S&P 500 benchmark
         if i > 0:
             r = spy_returns.iloc[i]
             if pd.notna(r):
                 value_sp500 *= (1 + r)
         sp500_values.append(value_sp500)
 
-        # S&P 1: rank by free-float market cap at month open (= prior close),
-        # using only shares data filed on or before that date (no look-ahead),
-        # then hold through the month and apply its return.
         if i == 0:
             sp1_values.append(value_sp1)
             top_tickers.append(None)
@@ -299,7 +270,7 @@ class InvestmentSimulator:
     def __init__(self, root):
         self.root = root
         self.root.title("S&P 1 Strategy Simulator")
-        self.root.geometry("1100x660")
+        self.root.geometry("1100x680")
         self.root.configure(bg="#f0f2f5")
         self._build_ui()
 
@@ -356,10 +327,19 @@ class InvestmentSimulator:
         right = tk.Frame(self.root, bg="#f0f2f5")
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        self.fig, self.ax = plt.subplots(figsize=(9, 5.5))
+        self.fig, self.ax = plt.subplots(figsize=(9, 5.2))
         self.fig.patch.set_facecolor("#f0f2f5")
+        
         self.canvas = FigureCanvasTkAgg(self.fig, right)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # FIX: The toolbar must be created AND explicitly packed to the bottom
+        self.toolbar = NavigationToolbar2Tk(self.canvas, right)
+        self.toolbar.configure(bg="#f0f2f5")
+        self.toolbar.update()
+        self.toolbar.pack(side=tk.BOTTOM, fill=tk.X) # THIS FORCES IT TO SHOW
+        
+        # Then we pack the canvas into the remaining space above the toolbar
+        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     def _set_status(self, msg):
         self.result_labels["sp1"].config(text=msg, fg="#555")
@@ -374,7 +354,6 @@ class InvestmentSimulator:
 
             self._set_status("Starting…")
 
-            # Update to receive top_tickers history array
             dates, sp500_vals, sp1_vals, top_tickers = run_simulation(
                 start_str, end_str, seed, monthly, status_cb=self._set_status)
 
@@ -404,10 +383,9 @@ class InvestmentSimulator:
 
             # --- Map Unique Tickers to Colors ---
             unique_tickers = list(set([t for t in top_tickers if t is not None]))
-            cmap = plt.get_cmap('tab10') # Generate a distinct color map
+            cmap = plt.get_cmap('tab10') 
             ticker_colors = {t: cmap(i % 10) for i, t in enumerate(unique_tickers)}
 
-            # Plot a dummy line so S&P1 shows up nicely in the legend 
             self.ax.plot([], [], label="S&P 1 (Largest Market Cap)", linewidth=2.5, color="gray")
 
             # --- Break SP1 into colored segments ---
@@ -425,20 +403,16 @@ class InvestmentSimulator:
             # Plot each block with its respective color and label
             for block_index, (t, s, e) in enumerate(blocks):
                 if t is None: continue
-                # We extend indices backward by 1 so the segments connect smoothly
                 seg_x = dates[s-1 : e]
                 seg_y = sp1_vals[s-1 : e]
                 c = ticker_colors[t]
                 
-                # Draw Line Segment
                 self.ax.plot(seg_x, seg_y, linewidth=2.5, color=c)
                 
-                # 1. Find the midpoint of the segment for the x-axis
                 mid_idx = len(seg_x) // 2
                 x_pos = seg_x[mid_idx]
                 y_pos = seg_y[mid_idx]
                 
-                # 2. Alternate placing the text above and below the line
                 if block_index % 2 == 0:
                     y_offset = 12
                     v_align = 'bottom'
@@ -446,7 +420,6 @@ class InvestmentSimulator:
                     y_offset = -12
                     v_align = 'top'
                 
-                # Annotate using the midpoint and alternating heights
                 self.ax.annotate(t, xy=(x_pos, y_pos), xytext=(0, y_offset),
                                  textcoords="offset points", color=c,
                                  fontsize=8, fontweight='bold', ha='center', va=v_align,
@@ -461,15 +434,19 @@ class InvestmentSimulator:
                                  alpha=0.07, color=red)
 
             self.ax.set_title("S&P 1 (Largest Market Cap) vs. S&P 500",
-                              fontsize=1, fontweight="bold", pad=10)
-            self.ax.set_ylabel("Portfolio Value ($)", fontsize=8)
-            self.ax.legend(fontsize=8, framealpha=1.0, edgecolor="#ddd")
+                              fontsize=13, fontweight="bold", pad=10)
+            self.ax.set_ylabel("Portfolio Value ($)", fontsize=10)
+            self.ax.legend(fontsize=10, framealpha=1.0, edgecolor="#ddd")
             self.ax.grid(True, alpha=0.2, linestyle="--")
             self.ax.yaxis.set_major_formatter(
                 plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
             self.ax.tick_params(axis='both', labelsize=8)
+            
             self.fig.tight_layout()
             self.canvas.draw()
+            
+            # Tells the toolbar to register the new bounds for the pan/zoom features
+            self.toolbar.update() 
 
         except Exception as e:
             messagebox.showerror("Error", str(e))
