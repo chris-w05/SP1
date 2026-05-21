@@ -239,7 +239,7 @@ def run_simulation(start_str, end_str, seed, monthly_contrib, status_cb=None):
     value_sp1    = float(seed)
     sp500_values = []
     sp1_values   = []
-    current_top  = None
+    top_tickers  = [] # Array to track history for graph coloring
 
     if status_cb:
         status_cb("Running simulation…")
@@ -261,6 +261,7 @@ def run_simulation(start_str, end_str, seed, monthly_contrib, status_cb=None):
         # then hold through the month and apply its return.
         if i == 0:
             sp1_values.append(value_sp1)
+            top_tickers.append(None)
             continue
 
         month_start = dates[i - 1]
@@ -276,10 +277,11 @@ def run_simulation(start_str, end_str, seed, monthly_contrib, status_cb=None):
 
         if not market_caps:
             sp1_values.append(value_sp1)
+            top_tickers.append(top_tickers[-1] if len(top_tickers) > 0 else None)
             continue
 
         top_ticker  = max(market_caps, key=market_caps.get)
-        current_top = top_ticker
+        top_tickers.append(top_ticker)
 
         p0 = prices.iloc[i - 1][top_ticker]
         p1 = prices.iloc[i][top_ticker]
@@ -288,7 +290,7 @@ def run_simulation(start_str, end_str, seed, monthly_contrib, status_cb=None):
 
         sp1_values.append(value_sp1)
 
-    return dates, np.array(sp500_values), np.array(sp1_values), current_top
+    return dates, np.array(sp500_values), np.array(sp1_values), top_tickers
 
 
 # ── GUI ───────────────────────────────────────────────────────────────────────
@@ -372,11 +374,13 @@ class InvestmentSimulator:
 
             self._set_status("Starting…")
 
-            dates, sp500_vals, sp1_vals, final_top = run_simulation(
+            # Update to receive top_tickers history array
+            dates, sp500_vals, sp1_vals, top_tickers = run_simulation(
                 start_str, end_str, seed, monthly, status_cb=self._set_status)
 
             final_sp500 = sp500_vals[-1]
             final_sp1   = sp1_vals[-1]
+            final_top   = top_tickers[-1]
             diff        = final_sp1 - final_sp500
             diff_pct    = (final_sp1 / final_sp500 - 1) * 100
             sign        = "+" if diff >= 0 else ""
@@ -393,10 +397,62 @@ class InvestmentSimulator:
 
             self.ax.clear()
             self.ax.set_facecolor("white")
+            
+            # --- Draw the standard SP500 line ---
             self.ax.plot(dates, sp500_vals, label="S&P 500 (SPY)",
                          linewidth=2, color="#1976D2")
-            self.ax.plot(dates, sp1_vals, label="S&P 1 (Largest Market Cap)",
-                         linewidth=2, color="#FF6B35")
+
+            # --- Map Unique Tickers to Colors ---
+            unique_tickers = list(set([t for t in top_tickers if t is not None]))
+            cmap = plt.get_cmap('tab10') # Generate a distinct color map
+            ticker_colors = {t: cmap(i % 10) for i, t in enumerate(unique_tickers)}
+
+            # Plot a dummy line so S&P1 shows up nicely in the legend 
+            self.ax.plot([], [], label="S&P 1 (Largest Market Cap)", linewidth=2.5, color="gray")
+
+            # --- Break SP1 into colored segments ---
+            blocks = []
+            if len(dates) > 1:
+                start_i = 1
+                curr_t = top_tickers[1]
+                for i in range(2, len(dates)):
+                    if top_tickers[i] != curr_t:
+                        blocks.append((curr_t, start_i, i))
+                        curr_t = top_tickers[i]
+                        start_i = i
+                blocks.append((curr_t, start_i, len(dates)))
+
+            # Plot each block with its respective color and label
+            for block_index, (t, s, e) in enumerate(blocks):
+                if t is None: continue
+                # We extend indices backward by 1 so the segments connect smoothly
+                seg_x = dates[s-1 : e]
+                seg_y = sp1_vals[s-1 : e]
+                c = ticker_colors[t]
+                
+                # Draw Line Segment
+                self.ax.plot(seg_x, seg_y, linewidth=2.5, color=c)
+                
+                # 1. Find the midpoint of the segment for the x-axis
+                mid_idx = len(seg_x) // 2
+                x_pos = seg_x[mid_idx]
+                y_pos = seg_y[mid_idx]
+                
+                # 2. Alternate placing the text above and below the line
+                if block_index % 2 == 0:
+                    y_offset = 12
+                    v_align = 'bottom'
+                else:
+                    y_offset = -12
+                    v_align = 'top'
+                
+                # Annotate using the midpoint and alternating heights
+                self.ax.annotate(t, xy=(x_pos, y_pos), xytext=(0, y_offset),
+                                 textcoords="offset points", color=c,
+                                 fontsize=8, fontweight='bold', ha='center', va=v_align,
+                                 bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.8))
+
+            # --- Fills ---
             self.ax.fill_between(dates, sp500_vals, sp1_vals,
                                  where=(sp1_vals >= sp500_vals),
                                  alpha=0.07, color=green)
@@ -405,12 +461,13 @@ class InvestmentSimulator:
                                  alpha=0.07, color=red)
 
             self.ax.set_title("S&P 1 (Largest Market Cap) vs. S&P 500",
-                              fontsize=13, fontweight="bold", pad=10)
-            self.ax.set_ylabel("Portfolio Value ($)", fontsize=10)
-            self.ax.legend(fontsize=10, framealpha=1.0, edgecolor="#ddd")
+                              fontsize=1, fontweight="bold", pad=10)
+            self.ax.set_ylabel("Portfolio Value ($)", fontsize=8)
+            self.ax.legend(fontsize=8, framealpha=1.0, edgecolor="#ddd")
             self.ax.grid(True, alpha=0.2, linestyle="--")
             self.ax.yaxis.set_major_formatter(
                 plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+            self.ax.tick_params(axis='both', labelsize=8)
             self.fig.tight_layout()
             self.canvas.draw()
 
